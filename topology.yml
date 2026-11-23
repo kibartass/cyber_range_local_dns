@@ -34,9 +34,12 @@ hosts:
       mgmt_user: ubuntu
     flavor: m1.medium
 
-router:
-  name: router
-  flavor: m1.small
+routers:
+  - name: router
+    base_box:
+      image: debian-12-x86_64
+      mgmt_user: debian
+    flavor: standard.small
 
 wan:
   enabled: true
