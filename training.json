@@ -1,0 +1,444 @@
+{
+  "title": "Local DNS Attack Lab",
+  "description": "Build a small authoritative/recursive BIND9 DNS environment, then attack it: hosts-file tampering, direct off-path response spoofing, and cache poisoning through the Answer, Authority, and Additional sections. Adapted from SEED Labs' Local DNS Attack Lab (Wenliang Du).",
+  "total_points": 30,
+  "hint_penalty_range": "1-3 points per hint",
+  "levels": [
+    {
+      "title": "Welcome: Local DNS Attack Lab",
+      "level_type": "INFO_LEVEL",
+      "order": 0,
+      "estimated_duration": 5,
+      "content": "## Local DNS Attack Lab\n\nDNS translates hostnames to IP addresses behind the scenes. Because most applications trust whatever answer comes back, an attacker who can inject a fake DNS response -- without ever touching the victim's machine -- can silently redirect users to a server of the attacker's choosing. This training walks through building a small, self-contained DNS environment and then attacking it, level by level: from a single compromised hosts file, up to poisoning an entire domain's worth of lookups in a recursive resolver's cache.\n\n### Your three machines\n- **user** -- an ordinary client machine, configured to use your own local DNS server.\n- **dns** -- a BIND9 server you will configure, authoritative for `example.com`, and recursive for everything else.\n- **attacker** -- your attack platform. It sits on the same local network as the other two and can observe their traffic.\n\n### Rules\n1. Attack only the machines inside this topology. All domain names used (`example.com`, `example.net`, `bank*.com`, `attacker32.com`, `google.com`) are fixed, reserved-for-documentation or lab-internal names -- nothing here ever leaves the sandbox network.\n2. Work through the levels in order: each attack level builds on the DNS server you set up earlier.\n3. Several levels have no visible 'did it work' signal from your own shell on purpose -- see the note below.\n\n### A note on how this is graded\nOn a real network, nobody would tell an attacker whether their spoof landed -- they'd have to infer it from the DNS server's behavior changing downstream. The flags for Levels 5-8 work the same way: there is no sudo access on the `user` or `dns` machines (so nobody can simply hand-edit a zone file or `/etc/hosts` to fake a result), and each flag only appears in your home directory once an independent monitor has observed a genuinely spoofed packet arrive over the network from your attacker machine. Running the real attack is the only way to see the flag -- there is no shortcut, and that is intentional.\n\n### Credits\nAdapted from SEED Labs' *Local DNS Attack Lab* by Wenliang Du (Syracuse University), used here for non-commercial education under its original license. See ATTRIBUTION.txt for full credit and a list of deliberate deviations from the original lab."
+    },
+    {
+      "title": "Access the Topology",
+      "level_type": "ACCESS_LEVEL",
+      "order": 1,
+      "passkey": "start",
+      "estimated_duration": 5,
+      "content": "## Accessing your machines\n\nOpen the topology view and access each machine's terminal (or SSH in directly once you have the sandbox's access info).\n\n| Machine | Login user | Notes |\n|---|---|---|\n| user | `seed` | No sudo. Use the provided helper commands for any step that needs root (see each level). |\n| dns | `seed` | No sudo. Same as above. |\n| attacker | `seed` | Full sudo. This is your attack platform; Scapy and tcpdump are pre-installed. |\n\nIf a level says 'run `/usr/local/bin/dns-lab-...`', that program is a pre-built, narrowly-scoped helper -- it performs exactly one fixed administrative action and nothing else, which is why it doesn't need you to have general sudo rights."
+    },
+    {
+      "title": "Task 1 -- Point the User Machine at Your DNS Server",
+      "level_type": "TRAINING_LEVEL",
+      "order": 2,
+      "estimated_duration": 10,
+      "minimal_possible_solve_time": 120,
+      "max_score": 2,
+      "answer": "10.0.2.16#53",
+      "incorrect_answer_limit": 10,
+      "content": "## Task 1: Configure the User Machine\n\nBy default the `user` machine resolves names using whatever resolver the platform's DHCP hands it. We want it to ask *our* DNS server first instead. Normally this means editing `/etc/resolv.conf`, but DHCP clients overwrite that file on every lease renewal -- editing it directly doesn't stick.\n\nThe standard fix (and the one this lab uses) is to add the nameserver line to `/etc/resolvconf/resolv.conf.d/head` instead: its contents get prepended to the generated `/etc/resolv.conf` every time, so it survives DHCP renewals.\n\nOn `user`, run:\n```\n/usr/local/bin/dns-lab-set-resolver\n```\nThis helper appends `nameserver 192.168.0.16` to the head file and re-runs `resolvconf -u` for you (it needs root; you don't have general sudo on this box, so the helper does exactly this one thing and nothing else).\n\nNow confirm it worked:\n```\ndig www.example.com\n```\n**Answer with the exact value of the `SERVER:` line at the bottom of the `dig` output** (format `ip#port`) -- that's your evidence the response came from your own server, not some other resolver.",
+      "solution": "`dig` prints which server answered the query in its final statistics block, as `SERVER: <ip>#<port>(<ip>)`. After pointing resolv.conf.d/head at 192.168.0.16 and running `resolvconf -u`, every lookup (including `www.example.com`, which isn't resolvable yet since the zone doesn't exist until Task 3) should show `SERVER: 192.168.0.16#53` -- proof the query actually went to your DNS box rather than an upstream resolver.",
+      "solution_penalized": false,
+      "hints": [
+        {
+          "title": "Which file actually sticks?",
+          "content": "DHCP rewrites /etc/resolv.conf directly on every renewal. resolvconf merges /etc/resolvconf/resolv.conf.d/head into the generated file instead of being overwritten by it.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "Where does dig show the server?",
+          "content": "Look at the last few lines of `dig`'s output, under ';; SERVER:'.",
+          "hint_penalty": 1,
+          "order": 2
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "resolver_configured",
+          "prereq_state": null,
+          "cmd": "/usr/local/bin/dns-lab-set-resolver",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        },
+        {
+          "state_name": "evidence_collected",
+          "prereq_state": "resolver_configured",
+          "cmd": "dig www.example.com",
+          "cmd_type": "shell",
+          "cmd_regex": "SERVER:\\s*192\\.168\\.0\\.16#53",
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "/usr/local/bin/dns-lab-set-resolver",
+        "dig www.example.com"
+      ],
+      "commands_required": true
+    },
+    {
+      "title": "Task 2 -- Stand Up the BIND9 Server",
+      "level_type": "TRAINING_LEVEL",
+      "order": 3,
+      "estimated_duration": 15,
+      "minimal_possible_solve_time": 180,
+      "max_score": 2,
+      "answer": "dnssec-enable no",
+      "incorrect_answer_limit": 10,
+      "content": "## Task 2: Set Up the Local DNS Server\n\n`dns` already has BIND9 installed. For this lab we need two options set in `/etc/bind/named.conf.options`:\n\n- a `dump-file` path, so you can inspect the resolver cache later, and\n- DNSSEC validation turned off, since DNSSEC exists specifically to block the kind of spoofing this lab teaches, and we want to see the attacks work unobstructed.\n\nOn `dns`, run:\n```\n/usr/local/bin/dns-lab-configure-bind-options\n```\nThis writes the options block and restarts `bind9` for you (again: no sudo on this box, so a single-purpose helper does it).\n\nInspect the file it wrote:\n```\ncat /etc/bind/named.conf.options\n```\n**What line in that file disables DNSSEC validation?** Answer with the exact directive (two words + its value).",
+      "solution": "`dnssec-enable no;` inside the options block. (The historical `dnssec-validation auto;` directive is commented out instead of being relied on, since in older BIND releases that alone doesn't fully disable validation.) You can confirm the dump-file is wired up with `sudo rndc dumpdb -cache` followed by inspecting `/var/cache/bind/dump.db` -- except you don't have sudo here either, which is deliberate; later levels show you the cache contents a different way.",
+      "solution_penalized": false,
+      "hints": [
+        {
+          "title": "Where to look",
+          "content": "Read /etc/bind/named.conf.options after running the helper.",
+          "hint_penalty": 1,
+          "order": 1
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "bind_options_set",
+          "prereq_state": null,
+          "cmd": "/usr/local/bin/dns-lab-configure-bind-options",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        },
+        {
+          "state_name": "verified",
+          "prereq_state": "bind_options_set",
+          "cmd": "cat /etc/bind/named.conf.options",
+          "cmd_type": "shell",
+          "cmd_regex": "dnssec-enable no;",
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "/usr/local/bin/dns-lab-configure-bind-options",
+        "cat /etc/bind/named.conf.options"
+      ],
+      "commands_required": true
+    },
+    {
+      "title": "Task 3 -- Host an Authoritative Zone for example.com",
+      "level_type": "TRAINING_LEVEL",
+      "order": 4,
+      "estimated_duration": 15,
+      "minimal_possible_solve_time": 180,
+      "max_score": 2,
+      "answer": "192.168.0.101",
+      "incorrect_answer_limit": 10,
+      "content": "## Task 3: Host a Zone on Your DNS Server\n\n`example.com` is an IANA-reserved documentation domain, so it's safe to declare ourselves authoritative for it inside this sandbox. On `dns`, run:\n```\n/usr/local/bin/dns-lab-configure-zone\n```\nThis adds a forward zone (`example.com`) and a matching reverse zone (`0.168.192.in-addr.arpa`) to `named.conf`, writes both zone files, and restarts `bind9`.\n\nFrom `user` (which already points at this server from Task 1), run:\n```\ndig www.example.com +norecurse\n```\nYou should see an `aa` flag in the response header -- your server answering as the *authority* for this domain, not as a recursive lookup.\n\n**What IP address does `www.example.com` resolve to?**",
+      "solution": "192.168.0.101, from the `www IN A 192.168.0.101` record in the zone file. The response carries the `aa` (Authoritative Answer) flag because the query falls inside a zone your own server is declared `type master` for -- it never has to ask anyone else.",
+      "solution_penalized": false,
+      "hints": [
+        {
+          "title": "Where's the IP defined?",
+          "content": "It's an A record for the 'www' name inside the zone file the helper wrote.",
+          "hint_penalty": 1,
+          "order": 1
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "zone_hosted",
+          "prereq_state": null,
+          "cmd": "/usr/local/bin/dns-lab-configure-zone",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        },
+        {
+          "state_name": "verified",
+          "prereq_state": "zone_hosted",
+          "cmd": "dig www.example.com +norecurse",
+          "cmd_type": "shell",
+          "cmd_regex": "192\\.168\\.0\\.101",
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "/usr/local/bin/dns-lab-configure-zone",
+        "dig www.example.com +norecurse"
+      ],
+      "commands_required": true
+    },
+    {
+      "title": "Task 4 -- Attack 1: Modify the Hosts File",
+      "level_type": "TRAINING_LEVEL",
+      "order": 5,
+      "estimated_duration": 10,
+      "minimal_possible_solve_time": 90,
+      "max_score": 2,
+      "answer": "ignored by dig, honored by ping and browsers",
+      "incorrect_answer_limit": 10,
+      "mitre_techniques": [
+        "T1565.001"
+      ],
+      "content": "## Task 4: Modifying the Host File\n\n`/etc/hosts` entries take priority over DNS lookups for most programs. Assume `user` is already compromised (you have a shell on it). Redirect `www.bank32.com` to any IP address you like (pick something obviously fake, e.g. `6.6.6.6`, so you can recognize it).\n\nRun, on `user`:\n```\n/usr/local/bin/dns-lab-set-hosts-entry 6.6.6.6\n```\n(replace `6.6.6.6` with whatever IP you chose -- the helper validates it's a well-formed IPv4 address and writes exactly one line, `<ip> www.bank32.com`, into `/etc/hosts`).\n\nNow compare:\n```\ndig www.bank32.com\nping -c1 www.bank32.com\n```\n**In one short phrase: which of `dig`/`ping` respects your hosts-file entry, and which ignores it?**",
+      "solution": "`dig` talks to a DNS server directly and never consults `/etc/hosts`, so it still fails (or returns whatever real-world answer exists for bank32.com) -- it shows your redirect had no effect on it. `ping`, like a web browser, goes through the system's standard name resolution (`getaddrinfo`/NSS), which checks `/etc/hosts` before ever asking a DNS server -- so it picks up your fake IP immediately. This is exactly why hosts-file tampering is invisible to DNS-level monitoring: it never touches the network at all.",
+      "solution_penalized": false,
+      "hints": [
+        {
+          "title": "Two different resolution paths",
+          "content": "dig is a pure DNS client. ping uses the OS's normal name resolution (NSS), which checks /etc/hosts first.",
+          "hint_penalty": 1,
+          "order": 1
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "hosts_modified",
+          "prereq_state": null,
+          "cmd": "/usr/local/bin/dns-lab-set-hosts-entry <ip>",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        },
+        {
+          "state_name": "compared",
+          "prereq_state": "hosts_modified",
+          "cmd": "dig www.bank32.com; ping -c1 www.bank32.com",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "/usr/local/bin/dns-lab-set-hosts-entry",
+        "dig www.bank32.com",
+        "ping www.bank32.com"
+      ],
+      "commands_required": false
+    },
+    {
+      "title": "Task 5 -- Attack 2: Directly Spoof a Response to the User",
+      "level_type": "TRAINING_LEVEL",
+      "order": 6,
+      "estimated_duration": 35,
+      "minimal_possible_solve_time": 300,
+      "max_score": 5,
+      "answer_variable_name": "task5_flag",
+      "variant_answers": true,
+      "incorrect_answer_limit": 15,
+      "mitre_techniques": [
+        "T1557"
+      ],
+      "content": "## Task 5: Directly Spoofing a Response to the User\n\n`user` has NOT been compromised this time. You (on `attacker`) are just another host on the same LAN. If you can see the DNS query `user` sends out, you can race the real DNS server to reply first with a forged answer -- and if your forged packet satisfies every field the real reply would (source IP/port, destination IP/port, transaction ID, question section), `user` has no way to tell the difference.\n\nFrom `user`, trigger a fresh query (the zone for `example.net` doesn't exist anywhere in this sandbox, so without your interference the query will simply time out):\n```\ndig www.example.net\n```\nOn `attacker`, write a Scapy script that:\n1. Sniffs for `user`'s outgoing query for `www.example.net` (filter on `udp and dst port 53`),\n2. Builds a spoofed reply with the DNS server's IP as source, `user`'s IP and source port as destination, the same transaction ID and question section, and an Answer section mapping `www.example.net` to an IP of your choice, and\n3. Sends it back to `user` before the (nonexistent) real answer ever could.\n\nThe lab guide's `4 Guideline` section has a worked Scapy example you can adapt (it spoofs a different query name, but the structure is identical).\n\nRe-run `dig www.example.net` from `user` while your script is sniffing/spoofing and confirm you get your forged IP back.\n\n**Once a real spoofed packet from your attacker machine has been observed landing on `user`, your flag will appear at `~/flag_task5.txt` on the `user` machine. Submit its contents.**\n\nNothing you do on `dns` or `user` themselves can produce this flag -- it only appears once your forged packet has actually crossed the network, which is the whole point of the exercise.",
+      "solution": "A background watcher on `user` (not reachable or editable by the student -- there is no sudo on this box) passively inspects incoming UDP/53 traffic. It only reveals the flag once it sees a DNS response (`qr=1`) whose answer section names `www.example.net`, arriving from the attacker machine's real IP address. A correct solution script: sniffs `udp and dst port 53` on attacker's interface; on each packet, checks `pkt[DNS].qd.qname` for `www.example.net`; builds the reply with swapped src/dst IP and port, the DNS server's IP as the spoofed source, the same `id`, `qr=1`, `aa=1`, `rd=0`, one Answer RR, and sends it with `send()`. See instructor-solutions/scripts/attack_task5_spoof.py for a tested reference implementation (instructors only -- not shipped to students).",
+      "solution_penalized": true,
+      "hints": [
+        {
+          "title": "Which fields must match exactly?",
+          "content": "Source IP = real DNS server's IP. Destination IP/port = the exact IP and source port the query came from. Transaction ID = pkt[DNS].id. Question section = pkt[DNS].qd, unchanged.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "Timing",
+          "content": "Since example.net isn't hosted anywhere in this sandbox, there's no real reply racing you -- you just need your script actively sniffing before you run dig.",
+          "hint_penalty": 1,
+          "order": 2
+        },
+        {
+          "title": "Still not seeing the flag?",
+          "content": "Check your script is sending from the attacker machine's OWN real interface/IP (you're only spoofing the DNS header's claimed source IP, not the Ethernet/IP packet's actual origin) -- the grading watcher specifically looks for packets that physically arrived from your attacker box.",
+          "hint_penalty": 2,
+          "order": 3
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "flag_revealed",
+          "prereq_state": null,
+          "cmd": "cat ~/flag_task5.txt",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "dig www.example.net",
+        "cat ~/flag_task5.txt"
+      ],
+      "commands_required": false
+    },
+    {
+      "title": "Task 6 -- Attack 3: DNS Cache Poisoning",
+      "level_type": "TRAINING_LEVEL",
+      "order": 7,
+      "estimated_duration": 35,
+      "minimal_possible_solve_time": 300,
+      "max_score": 5,
+      "answer_variable_name": "task6_flag",
+      "variant_answers": true,
+      "incorrect_answer_limit": 15,
+      "mitre_techniques": [
+        "T1557",
+        "T1584.002"
+      ],
+      "content": "## Task 6: DNS Cache Poisoning\n\nSpoofing the user directly only lasts for one query. A much more durable attack targets `dns` itself: if you can spoof the response it receives when IT asks upstream for `www.example.net`, the forged answer gets cached and served to every future querent -- including users you never directly interacted with.\n\nFrom `attacker`, write a Scapy script that sniffs for `dns`'s outgoing query for `www.example.net` and races a spoofed answer back to `dns`'s resolver port before any real upstream reply could arrive. Trigger the query from `user`:\n```\ndig www.example.net\n```\nGive your spoofed record a long TTL so it sticks.\n\n**Once a genuine spoofed packet from `attacker` is observed arriving at `dns` and the forged `www.example.net` record has been cached, your flag appears at `~/flag_task6.txt` on the `dns` machine.**",
+      "solution": "Same technique as Task 5, but targeting `dns`'s own query socket instead of `user`'s: sniff on attacker's interface for `dns`'s outbound query, spoof a reply with a plausible upstream IP as source, `dns`'s IP/port as destination, the correct transaction ID, an Answer RR for `www.example.net`, and a large `ttl` (e.g. 259200) so it persists in cache. See instructor-solutions/scripts/attack_task6_cache_poison.py.",
+      "solution_penalized": true,
+      "hints": [
+        {
+          "title": "What changed from Task 5?",
+          "content": "You're now racing the query that the DNS SERVER sends out, not the one from the user -- sniff/spoof against dns's egress, not user's.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "Make it stick",
+          "content": "Set a large TTL in your DNSRR so the poisoned entry survives in the cache rather than expiring immediately.",
+          "hint_penalty": 1,
+          "order": 2
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "flag_revealed",
+          "prereq_state": null,
+          "cmd": "cat ~/flag_task6.txt",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "dig www.example.net",
+        "cat ~/flag_task6.txt"
+      ],
+      "commands_required": false
+    },
+    {
+      "title": "Task 7 -- Attack 4: Poisoning via the Authority Section",
+      "level_type": "TRAINING_LEVEL",
+      "order": 8,
+      "estimated_duration": 40,
+      "minimal_possible_solve_time": 300,
+      "max_score": 6,
+      "answer_variable_name": "task7_flag",
+      "variant_answers": true,
+      "incorrect_answer_limit": 15,
+      "mitre_techniques": [
+        "T1557",
+        "T1584.002"
+      ],
+      "content": "## Task 7: DNS Cache Poisoning -- Targeting the Authority Section\n\nTask 6's attack only poisons one hostname at a time. A single spoofed reply can do far more damage if, alongside the Answer section, it also forges an **Authority section** NS record claiming that `attacker32.com` is now the nameserver for the *entire* `example.net` domain. If `dns` caches that claim, every future `*.example.net` lookup gets redirected to a server you control -- no further spoofing required.\n\nFrom `attacker`, extend your Task 6 script: in addition to the Answer section, add an Authority-section `DNSRR` of type `NS` for `example.net` pointing at `attacker32.com`. Trigger a fresh query from `user` (`dig www.example.net`, after flushing is not available to you -- just pick a name you haven't already poisoned, or wait and re-run).\n\n**Once `dns` has genuinely cached an Authority-section NS record for `example.net` pointing at `attacker32.com`, delivered by a real packet from `attacker`, your flag appears at `~/flag_task7.txt` on the `dns` machine.**",
+      "solution": "Add a second `DNSRR(rrname='example.net', type='NS', ttl=259200, rdata='attacker32.com')` to the `ns=` argument of the spoofed `DNS()` packet, and set `nscount=1` to match. BIND accepts in-bailiwick Authority-section glue from a response it already trusts, which is exactly why this attack works at all. See instructor-solutions/scripts/attack_task7_authority_spoof.py.",
+      "solution_penalized": true,
+      "hints": [
+        {
+          "title": "DNS section, not Answer",
+          "content": "Use the ns= field of the Scapy DNS() constructor, not an=. Set nscount to match how many records you put there.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "rrname for the NS record",
+          "content": "The NS record's rrname is the domain being delegated (example.net), and its rdata is the nameserver you're claiming authority as (attacker32.com).",
+          "hint_penalty": 2,
+          "order": 2
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "flag_revealed",
+          "prereq_state": null,
+          "cmd": "cat ~/flag_task7.txt",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "dig www.example.net",
+        "cat ~/flag_task7.txt"
+      ],
+      "commands_required": false
+    },
+    {
+      "title": "Task 8 -- Attack 5: Extending Impact to Another Domain",
+      "level_type": "TRAINING_LEVEL",
+      "order": 9,
+      "estimated_duration": 35,
+      "minimal_possible_solve_time": 240,
+      "max_score": 6,
+      "answer_variable_name": "task8_flag",
+      "variant_answers": true,
+      "incorrect_answer_limit": 15,
+      "mitre_techniques": [
+        "T1557",
+        "T1584.002"
+      ],
+      "content": "## Task 8: Targeting Another Domain\n\nTask 7 hijacked `example.net`. Since a spoofed reply's Authority section can carry more than one NS record, you can piggyback a second, completely unrelated domain onto the same forged packet. Add a second Authority-section NS record claiming `attacker32.com` is also now authoritative for `google.com` -- even though the query that triggered your spoofed reply was for `www.example.net`, not anything under `google.com`.\n\nFrom `attacker`, extend your script once more: keep the Task 7 Answer + Authority(example.net) records, and add a THIRD record to the Authority section: `DNSRR(rrname='google.com', type='NS', ttl=259200, rdata='attacker32.com')`. Update `nscount` accordingly. Trigger with a fresh `dig www.example.net` from `user`.\n\n**Once `dns` has cached an Authority-section NS record for `google.com` pointing at `attacker32.com`, delivered by a real packet from `attacker`, your flag appears at `~/flag_task8.txt` on the `dns` machine.**",
+      "solution": "`ns=NSsec1/NSsec2` in Scapy, where NSsec1 is the example.net record from Task 7 and NSsec2 is `DNSRR(rrname='google.com', type='NS', ttl=259200, rdata='attacker32.com')`, with `nscount=2`. This demonstrates that a single successful spoof against one domain's lookup can be abused to poison records for domains that were never even queried -- as long as the resolver doesn't reject out-of-bailiwick glue. See instructor-solutions/scripts/attack_task8_authority_multi_spoof.py.",
+      "solution_penalized": true,
+      "hints": [
+        {
+          "title": "Two NS records, not two packets",
+          "content": "Both Authority-section NS records go in the SAME spoofed reply -- chain them with Scapy's / operator in the ns= field.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "nscount",
+          "content": "Don't forget to bump nscount to 2 to match the two chained NS records, or BIND may not parse the section the way you expect.",
+          "hint_penalty": 1,
+          "order": 2
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [
+        {
+          "state_name": "flag_revealed",
+          "prereq_state": null,
+          "cmd": "cat ~/flag_task8.txt",
+          "cmd_type": "shell",
+          "cmd_regex": null,
+          "optional": false
+        }
+      ],
+      "expected_commands": [
+        "dig www.example.net",
+        "cat ~/flag_task8.txt"
+      ],
+      "commands_required": false
+    },
+    {
+      "title": "Task 9 -- Attack 6: Poisoning the Additional Section",
+      "level_type": "TRAINING_LEVEL",
+      "order": 10,
+      "estimated_duration": 25,
+      "minimal_possible_solve_time": 240,
+      "max_score": 2,
+      "answer": "bailiwick",
+      "incorrect_answer_limit": 10,
+      "mitre_techniques": [
+        "T1557"
+      ],
+      "content": "## Task 9: Targeting the Additional Section\n\nThe Additional section of a DNS reply usually supplies IP addresses ('glue') for hostnames mentioned in the Authority section, saving the resolver an extra round trip. Extend your spoofed reply from Task 7/8 with an Additional section containing three A records:\n\n1. `attacker32.com -> 1.2.3.4` (glue for your own forged NS record),\n2. `ns.example.net -> 5.6.7.8` (glue for a name mentioned in the Authority section),\n3. `www.facebook.com -> 3.4.5.6` (an entirely unrelated name, 'helpfully' thrown in).\n\nSend this reply and inspect what actually ends up cached. You don't need a new attacker script for this -- reason about it from what you've already learned about how resolvers decide what glue to trust.\n\n**In one word: what is the general name for the rule a well-behaved resolver uses to decide which Additional-section records it's allowed to cache (hint: it only trusts glue that falls 'in-domain' relative to what the reply is actually authoritative for)?**",
+      "solution": "**Bailiwick** checking. A resolver following bailiwick rules only accepts/caches additional-section glue for names that fall within the zone the response is actually authoritative for. Records 1 and 2 are in-bailiwick (they glue names that were themselves just introduced in the Authority/Answer sections of the SAME reply, within domains this reply is speaking for) and get cached. Record 3, `www.facebook.com`, is completely unrelated to anything this reply is authoritative over -- a bailiwick-aware resolver discards it rather than letting any attacker who can answer one query silently rewrite unrelated domains.",
+      "solution_penalized": false,
+      "hints": [
+        {
+          "title": "Think about scope, not content",
+          "content": "It's not about whether a record LOOKS plausible -- it's about whether the name belongs to a zone this particular reply has any business speaking for.",
+          "hint_penalty": 1,
+          "order": 1
+        },
+        {
+          "title": "One more hint",
+          "content": "The term also appears in RFC discussions of cache poisoning defenses; it describes which 'turf' a DNS answer is allowed to make claims about.",
+          "hint_penalty": 2,
+          "order": 2
+        }
+      ],
+      "attachments": [],
+      "reference_solution": [],
+      "expected_commands": [],
+      "commands_required": false
+    }
+  ]
+}

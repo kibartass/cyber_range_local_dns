@@ -1,0 +1,49 @@
+ATTRIBUTION
+===========
+
+This training scenario is an adaptation of:
+
+  "Local DNS Attack Lab"
+  SEED Labs, Wenliang Du
+  Copyright (c) 2018 Wenliang Du. All rights reserved.
+  Free for non-commercial educational use. Commercial use is prohibited.
+  https://seedsecuritylabs.org  /  https://www.handsonsecurity.net
+
+The task structure (configuring a local DNS server, hosting an authoritative
+zone, then attacking it via hosts-file tampering, direct response spoofing,
+and cache poisoning through the Answer/Authority/Additional sections) follows
+the original lab's narrative arc. All task text, hints, and solutions in this
+repository are original writing produced for this CyberRangeCZ Platform
+scenario, not verbatim reproductions of the SEED Labs PDF.
+
+Deliberate deviations from the original lab, and why:
+
+1. Netwox (Task 5 in the original PDF) is a proprietary tool that cannot be
+   fetched or redistributed in this build pipeline. Every spoofing/poisoning
+   task (5 through 9 in this scenario, corresponding to original Tasks 5-9)
+   instead uses Scapy throughout, which the original lab already requires for
+   its later tasks and for which it supplies sample code. This is a tooling
+   substitution only; the underlying DNS attack concepts are unchanged.
+
+2. The original lab assumes a single-user practice VM and has the student
+   manually run `sudo` to edit live system files and even reconfigure the
+   resolver/DNS server by hand. On a shared, flag-graded platform this would
+   let a student forge "attack succeeded" evidence without ever performing
+   the attack. This scenario removes sudo entirely from the `user` and `dns`
+   machines and replaces every root-requiring setup step with a narrowly
+   scoped, pre-reviewed setuid-root helper binary. See README.md,
+   "Anti-cheat design", for the full rationale.
+
+Template scenario structure (repo layout, training.json field conventions,
+APG variant-answer usage, anti-cheat methodology) carried over from an
+earlier CyberRangeCZ scenario built in this same workflow
+("race-condition-seed-lab", itself adapted from SEED Labs' "Race Condition
+Vulnerability Lab", also by Wenliang Du, same license terms).
+
+License note: the code/automation in this repository (Ansible roles, setuid
+helper C sources, Scapy watcher/attack scripts, topology and training.json)
+is released under the MIT license (see LICENSE). The task narrative text is
+an original derivative work inspired by SEED Labs material and is shared
+under the same "non-commercial educational use only" restriction as the
+source material; it is NOT relicensed as MIT. Do not use this repository,
+or any part derived from the SEED Labs lab, for commercial purposes.

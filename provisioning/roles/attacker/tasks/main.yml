@@ -1,0 +1,50 @@
+---
+# The attacker machine deliberately keeps full sudo for the lab user: it
+# holds no secrets and is not the target of any check in this scenario --
+# it is the one machine where broad privilege is exactly the point (it's
+# the platform the actual exploit code runs from). See README.md,
+# "Anti-cheat design", for the reasoning.
+
+- name: Ensure lab user has full sudo on the attacker machine
+  user:
+    name: "{{ lab_user }}"
+    groups: sudo
+    append: true
+
+- name: Allow passwordless sudo for the lab user
+  copy:
+    dest: "/etc/sudoers.d/{{ lab_user }}"
+    content: "{{ lab_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Install Scapy and packet-crafting dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-scapy
+      - tcpdump
+      - dnsutils
+    update_cache: true
+
+# NOTE: the original SEED lab's Task 5 uses the proprietary "Netwox" tool.
+# It is deliberately NOT installed here (not available/redistributable in
+# this build pipeline) -- see ATTRIBUTION.txt. Every spoofing task in this
+# scenario (5 through 9) uses Scapy instead, which is already required for
+# the later tasks in the original lab.
+
+- name: Create a scratch directory for the student's attack scripts
+  file:
+    path: "/home/{{ lab_user }}/attacks"
+    state: directory
+    owner: "{{ lab_user }}"
+    group: "{{ lab_user }}"
+    mode: "0750"
+
+# Deliberately NOT deploying any attack scripts here: writing the Scapy
+# sniff/spoof code is the graded exercise for Tasks 5-9. Reference
+# implementations exist only in instructor-solutions/scripts/, which is
+# never packaged into the student-facing deliverable.

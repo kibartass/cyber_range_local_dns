@@ -1,0 +1,154 @@
+---
+- name: Install BIND9
+  apt:
+    name:
+      - bind9
+      - bind9utils
+      - bind9-doc
+    update_cache: true
+
+# --- Lock the machine down first, before anything else ---------------------
+- name: Remove lab user from sudo/admin groups
+  user:
+    name: "{{ lab_user }}"
+    groups: []
+    append: false
+
+- name: Scrub any sudoers.d drop-ins for the lab user
+  file:
+    path: "/etc/sudoers.d/{{ lab_user }}"
+    state: absent
+
+- name: Re-validate sudoers after scrubbing
+  command: visudo -c
+  changed_when: false
+
+# --- Allow bind9 to be restarted and its config edited by our helpers only --
+- name: Ensure bind9 is stopped before first scripted configuration
+  systemd:
+    name: bind9
+    state: stopped
+  ignore_errors: true
+
+# --- Build and install the two narrowly-scoped setuid helpers --------------
+- name: Copy setuid helper sources
+  copy:
+    src: "files/{{ item }}.c"
+    dest: "/usr/local/src/{{ item }}.c"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - dns-lab-configure-bind-options
+    - dns-lab-configure-zone
+
+- name: Compile setuid helpers
+  command: "cc -O2 -Wall -o /usr/local/bin/{{ item }} /usr/local/src/{{ item }}.c"
+  args:
+    creates: "/usr/local/bin/{{ item }}"
+  loop:
+    - dns-lab-configure-bind-options
+    - dns-lab-configure-zone
+
+- name: Install helpers as setuid-root, executable only by the lab group
+  file:
+    path: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: "{{ lab_user }}"
+    mode: "4750"
+  loop:
+    - dns-lab-configure-bind-options
+    - dns-lab-configure-zone
+
+# --- Deploy the flag watchers for Tasks 6, 7, 8 (this machine is the target)-
+- name: Deploy shared flag watcher script
+  copy:
+    src: files/flag_watcher.py
+    dest: /usr/local/sbin/flag_watcher.py
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy flag watcher systemd template unit
+  copy:
+    src: files/dns-lab-flag-watcher@.service
+    dest: /etc/systemd/system/dns-lab-flag-watcher@.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Write per-sandbox secrets (root-only)
+  copy:
+    content: "{{ item.value }}\n"
+    dest: "/root/.dns-lab/{{ item.key }}.secret"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - { key: "task6_flag", value: "{{ task6_flag }}" }
+    - { key: "task7_flag", value: "{{ task7_flag }}" }
+    - { key: "task8_flag", value: "{{ task8_flag }}" }
+
+- name: Write Task 6 watcher config (direct cache poisoning, A record)
+  copy:
+    dest: /etc/dns-lab/watcher-task6.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {
+        "iface": "eth0",
+        "attacker_ip": "{{ attacker_ip }}",
+        "qname_substr": "example.net",
+        "need_rr_type": "A",
+        "secret_path": "/root/.dns-lab/task6_flag.secret",
+        "reveal_path": "/home/{{ lab_user }}/flag_task6.txt",
+        "reveal_owner": "{{ lab_user }}"
+      }
+
+- name: Write Task 7 watcher config (Authority-section NS for example.net)
+  copy:
+    dest: /etc/dns-lab/watcher-task7.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {
+        "iface": "eth0",
+        "attacker_ip": "{{ attacker_ip }}",
+        "qname_substr": "example.net",
+        "need_rr_type": "NS",
+        "need_rdata_contains": "attacker32.com",
+        "secret_path": "/root/.dns-lab/task7_flag.secret",
+        "reveal_path": "/home/{{ lab_user }}/flag_task7.txt",
+        "reveal_owner": "{{ lab_user }}"
+      }
+
+- name: Write Task 8 watcher config (Authority-section NS for google.com)
+  copy:
+    dest: /etc/dns-lab/watcher-task8.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {
+        "iface": "eth0",
+        "attacker_ip": "{{ attacker_ip }}",
+        "qname_substr": "google.com",
+        "need_rr_type": "NS",
+        "need_rdata_contains": "attacker32.com",
+        "secret_path": "/root/.dns-lab/task8_flag.secret",
+        "reveal_path": "/home/{{ lab_user }}/flag_task8.txt",
+        "reveal_owner": "{{ lab_user }}"
+      }
+
+- name: Enable and start the Task 6/7/8 flag watchers
+  systemd:
+    name: "dns-lab-flag-watcher@{{ item }}.service"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - task6
+    - task7
+    - task8

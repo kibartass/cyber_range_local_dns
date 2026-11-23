@@ -1,0 +1,15 @@
+---
+roles: []
+collections:
+  - name: ansible.posix
+    version: ">=1.5.0"
+
+# NOTE: the original reference scenario pulled in external galaxy roles
+# (sandbox-logging, chrony, user-access, hosts-aliases). This lab is
+# self-contained enough that it doesn't strictly need them, but if your
+# platform's base playbook convention expects them for every scenario,
+# add the same entries here that your other scenarios use, e.g.:
+#   - src: git@gitlab.ics.muni.cz:muni-kypo-trainings/base-roles/sandbox-logging.git
+#   - src: git@gitlab.ics.muni.cz:muni-kypo-trainings/base-roles/chrony.git
+# left out here since their exact source URLs are platform/org-specific
+# and couldn't be verified in this chat.

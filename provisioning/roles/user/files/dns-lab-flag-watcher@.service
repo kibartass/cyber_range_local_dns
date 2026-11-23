@@ -1,0 +1,18 @@
+[Unit]
+Description=DNS Lab flag watcher (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/flag_watcher.py /etc/dns-lab/watcher-%i.json
+Restart=no
+User=root
+# Hardening: this process only needs to sniff and write to its own
+# protected directories, nothing else.
+ProtectHome=false
+ReadWritePaths=/home /var/log/dns-lab /etc/dns-lab /root/.dns-lab
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

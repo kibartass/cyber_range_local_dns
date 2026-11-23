@@ -1,0 +1,34 @@
+# APG "variant answers" definitions.
+# Each of these is regenerated fresh, independently, at every sandbox
+# allocation. The platform injects the generated value into the Ansible run
+# as a normal variable of the same name, AND stores it as the expected
+# answer for whichever training.json level sets
+#   answer_variable_name: "<name>"
+#   variant_answers: true
+#
+# Naming convention: taskN_flag, where N matches the original SEED Labs
+# task numbering used throughout this repo's docs (Task 5 = direct spoofing,
+# Task 6 = cache poisoning, Task 7 = authority-section poisoning,
+# Task 8 = extending impact to a second domain).
+#
+# Deliberately NOT variant: Tasks 1-4 and Task 9 use plain, same-for-everyone
+# answers (see anti_cheat_design in README.md) because they are either
+# deterministic setup steps or open-ended comprehension questions with no
+# real secret to protect -- manufacturing fake uniqueness there would add
+# friction without adding any anti-cheat value.
+
+task5_flag:
+  type: text
+  length: 12
+
+task6_flag:
+  type: text
+  length: 12
+
+task7_flag:
+  type: text
+  length: 12
+
+task8_flag:
+  type: text
+  length: 12

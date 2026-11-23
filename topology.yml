@@ -1,0 +1,65 @@
+# Topology for "local-dns-attack-lab".
+#
+# OPEN ITEM FOR THE USER TO VERIFY: the exact top-level schema (field names
+# for routers/wan/networks/net_mappings/router_mappings/groups) was
+# reconstructed from the conventions described in the handoff context, not
+# copied from a live platform export. Confirm this parses against your
+# CyberRangeCZ Platform version before deploying, the same way "seed" /
+# "ubuntu" / "m1.medium" need confirming against your actual image catalog.
+#
+# Three hosts on one shared LAN segment, matching the original SEED lab's
+# requirement that the attacker be able to observe (sniff) DNS queries
+# between the user machine and the DNS server -- this only works if all
+# three sit on the same broadcast domain, so do not split them across
+# separate networks/subnets.
+
+name: local-dns-attack-lab
+
+hosts:
+  - name: user
+    base_box:
+      image: seed          # CONFIRM against platform image catalog
+      mgmt_user: ubuntu     # CONFIRM matches the "seed" image's default user
+    flavor: m1.medium
+
+  - name: dns
+    base_box:
+      image: seed
+      mgmt_user: ubuntu
+    flavor: m1.medium
+
+  - name: attacker
+    base_box:
+      image: seed
+      mgmt_user: ubuntu
+    flavor: m1.medium
+
+router:
+  name: router
+  flavor: m1.small
+
+wan:
+  enabled: true
+
+networks:
+  - name: lan
+    cidr: 192.168.0.0/24
+
+net_mappings:
+  - host: user
+    network: lan
+    ip: 192.168.0.18
+  - host: dns
+    network: lan
+    ip: 192.168.0.16
+  - host: attacker
+    network: lan
+    ip: 192.168.0.17
+
+router_mappings:
+  - router: router
+    network: lan
+
+groups:
+  - name: all
+    hosts: [user, dns, attacker]

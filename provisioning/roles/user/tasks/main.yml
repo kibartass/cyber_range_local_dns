@@ -1,0 +1,95 @@
+---
+# --- Lock the machine down first, before anything else ---------------------
+- name: Remove lab user from sudo/admin groups
+  user:
+    name: "{{ lab_user }}"
+    groups: []
+    append: false
+
+- name: Scrub any sudoers.d drop-ins for the lab user
+  file:
+    path: "/etc/sudoers.d/{{ lab_user }}"
+    state: absent
+
+- name: Re-validate sudoers after scrubbing
+  command: visudo -c
+  changed_when: false
+
+# --- Build and install the two narrowly-scoped setuid helpers --------------
+- name: Copy setuid helper sources
+  copy:
+    src: "files/{{ item }}.c"
+    dest: "/usr/local/src/{{ item }}.c"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - dns-lab-set-resolver
+    - dns-lab-set-hosts-entry
+
+- name: Compile setuid helpers
+  command: "cc -O2 -Wall -o /usr/local/bin/{{ item }} /usr/local/src/{{ item }}.c"
+  args:
+    creates: "/usr/local/bin/{{ item }}"
+  loop:
+    - dns-lab-set-resolver
+    - dns-lab-set-hosts-entry
+
+- name: Install helpers as setuid-root, executable only by the lab group
+  file:
+    path: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: "{{ lab_user }}"
+    mode: "4750"
+  loop:
+    - dns-lab-set-resolver
+    - dns-lab-set-hosts-entry
+
+# --- Deploy the flag watcher for Task 5 (this machine is the attack target) -
+- name: Deploy shared flag watcher script
+  copy:
+    src: files/flag_watcher.py
+    dest: /usr/local/sbin/flag_watcher.py
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy flag watcher systemd template unit
+  copy:
+    src: files/dns-lab-flag-watcher@.service
+    dest: /etc/systemd/system/dns-lab-flag-watcher@.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Write Task 5's per-sandbox secret (root-only)
+  copy:
+    content: "{{ task5_flag }}\n"
+    dest: /root/.dns-lab/task5_flag.secret
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Write Task 5 watcher config
+  copy:
+    dest: /etc/dns-lab/watcher-task5.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      {
+        "iface": "eth0",
+        "attacker_ip": "{{ attacker_ip }}",
+        "qname_substr": "example.net",
+        "need_rr_type": "A",
+        "secret_path": "/root/.dns-lab/task5_flag.secret",
+        "reveal_path": "/home/{{ lab_user }}/flag_task5.txt",
+        "reveal_owner": "{{ lab_user }}"
+      }
+
+- name: Enable and start the Task 5 flag watcher
+  systemd:
+    name: "dns-lab-flag-watcher@task5.service"
+    daemon_reload: true
+    enabled: true
+    state: started
